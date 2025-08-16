@@ -1,0 +1,1476 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xiru dos Pampas</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #8B4513 0%, #D2691E 50%, #CD853F 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Press Start 2P', monospace;
+            color: #FFFACD;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+        }
+
+        canvas {
+            border: 4px solid #8B4513;
+            border-radius: 8px;
+            box-shadow:
+                0 0 20px rgba(139, 69, 19, 0.5),
+                inset 0 0 10px rgba(0, 0, 0, 0.3);
+            background: #F4A460;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+        }
+
+        .ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 12px;
+            z-index: 10;
+            background: rgba(139, 69, 19, 0.8);
+            padding: 6px;
+            border-radius: 3px;
+            border: 1px solid #654321;
+            text-shadow: 1px 1px 0px #000;
+        }
+
+        .ui div {
+            margin: 5px 0;
+            color: #FFFACD;
+        }
+
+        .instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            font-size: 10px;
+            color: #FFFACD;
+            background: rgba(139, 69, 19, 0.8);
+            padding: 6px;
+            border-radius: 3px;
+            border: 1px solid #654321;
+            text-shadow: 1px 1px 0px #000;
+        }
+
+        .instructions div {
+            margin: 2px 0;
+        }
+
+        .game-title {
+            position: absolute;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 20px;
+            color: #FFD700;
+            text-shadow: 3px 3px 0px #8B4513;
+            z-index: 5;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="game-title">🤠 XIRU DOS PAMPAS 🤠</div>
+    <div class="ui">
+        <div id="score">💰 Score: 0</div>
+        <div id="lives">❤️ Lives: 3</div>
+        <div id="wave">🌊 Wave: 1</div>
+        <div id="world">🏜️ World: Prairie Lands</div>
+    </div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div class="instructions">
+        <div>🎮 WASD: Move | Arrow Keys: Shoot | Spacebar: Start/Restart</div>
+        <div>🎯 Survive the outlaw waves and collect power-ups!</div>
+        <div>⭐ Defeat bandits, outlaws, desperados, and corrupt sheriffs!</div>
+    </div>
+
+    <script>
+        // Game constants
+        const CANVAS_WIDTH = 800;
+        const CANVAS_HEIGHT = 600;
+        const PLAYER_SIZE = 32;  // 2x bigger (16 -> 32)
+        const BULLET_SIZE = 6;   // 2x bigger (4 -> 6) - slightly bigger for visibility
+        const ENEMY_SIZE = 24;   // 2x bigger (12 -> 24)
+        const POWERUP_SIZE = 20; // 2x bigger (10 -> 20)
+
+        // Game state
+        let gameState = 'menu'; // menu, playing, gameOver, levelTransition
+        let score = 0;
+        let lives = 3;
+        let currentWave = 1;
+        let currentWorld = 0;
+        let highScore = localStorage.getItem('xiruDosPampasHighScore') || 0;
+
+        // World definitions - 16-bit wild west themed
+        const worlds = [
+            {
+                name: 'Prairie Lands',
+                color: '#F4A460',
+                accent: '#DEB887',
+                waves: 8,
+                bgPattern: 'desert'
+            },
+            {
+                name: 'Cactus Gulch',
+                color: '#CD853F',
+                accent: '#D2691E',
+                waves: 10,
+                bgPattern: 'canyon'
+            },
+            {
+                name: 'Skull Creek',
+                color: '#A0522D',
+                accent: '#8B4513',
+                waves: 12,
+                bgPattern: 'town'
+            }
+        ];
+
+        // Canvas setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Input handling
+        const keys = {};
+        const shootKeys = {};
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (gameState === 'menu' || gameState === 'gameOver') {
+                    startGame();
+                }
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+        });
+
+        // Player class
+        class Player {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.size = PLAYER_SIZE;
+                this.speed = 3;
+                this.shootCooldown = 0;
+                this.weapon = 'single'; // single, machinegun, shotgun
+                this.weaponTimer = 0;
+                this.magnetRange = 0;
+                this.magnetTimer = 0;
+                // Animation properties
+                this.animFrame = 0;
+                this.isMoving = false;
+                this.facingDirection = 1; // 1 for right, -1 for left
+            }
+
+            update() {
+                // Movement and animation
+                this.isMoving = false;
+                if (keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD']) {
+                    let dx = 0, dy = 0;
+                    if (keys['KeyW']) dy -= this.speed;
+                    if (keys['KeyS']) dy += this.speed;
+                    if (keys['KeyA']) { dx -= this.speed; this.facingDirection = -1; }
+                    if (keys['KeyD']) { dx += this.speed; this.facingDirection = 1; }
+
+                    // Normalize diagonal movement
+                    if (dx !== 0 && dy !== 0) {
+                        dx *= 0.707;
+                        dy *= 0.707;
+                    }
+
+                    this.x = Math.max(this.size / 2, Math.min(CANVAS_WIDTH - this.size / 2, this.x + dx));
+                    this.y = Math.max(this.size / 2, Math.min(CANVAS_HEIGHT - this.size / 2, this.y + dy));
+
+                    this.isMoving = true;
+                    this.animFrame += 0.3; // Animation speed
+                }
+
+                // Shooting
+                if (this.shootCooldown > 0) this.shootCooldown--;
+
+                if (this.shootCooldown === 0) {
+                    if (keys['ArrowUp']) this.shoot(0, -1);
+                    else if (keys['ArrowDown']) this.shoot(0, 1);
+                    else if (keys['ArrowLeft']) this.shoot(-1, 0);
+                    else if (keys['ArrowRight']) this.shoot(1, 0);
+                }
+
+                // Update weapon timers
+                if (this.weaponTimer > 0) {
+                    this.weaponTimer--;
+                    if (this.weaponTimer === 0) {
+                        this.weapon = 'single';
+                    }
+                }
+
+                if (this.magnetTimer > 0) {
+                    this.magnetTimer--;
+                    if (this.magnetTimer === 0) {
+                        this.magnetRange = 0;
+                    }
+                }
+            }
+
+            shoot(dx, dy) {
+                playSound('shoot');
+
+                if (this.weapon === 'single') {
+                    bullets.push(new Bullet(this.x, this.y, dx * 8, dy * 8, 'player'));
+                    this.shootCooldown = 15;
+                } else if (this.weapon === 'machinegun') {
+                    bullets.push(new Bullet(this.x, this.y, dx * 10, dy * 10, 'player'));
+                    this.shootCooldown = 5;
+                } else if (this.weapon === 'shotgun') {
+                    for (let i = -1; i <= 1; i++) {
+                        let angle = Math.atan2(dy, dx) + i * 0.3;
+                        bullets.push(new Bullet(this.x, this.y, Math.cos(angle) * 8, Math.sin(angle) * 8, 'player'));
+                    }
+                    this.shootCooldown = 20;
+                }
+            }
+
+            draw() {
+                // Draw Prairie King style hero character
+                const x = Math.floor(this.x);
+                const y = Math.floor(this.y);
+                const dir = this.facingDirection;
+
+                // Animation offsets for walking (Prairie King style)
+                const walkCycle = Math.sin(this.animFrame) * (this.isMoving ? 1 : 0);
+                const armSwing = walkCycle * 1.5;
+                const legSwing = walkCycle * 2;
+                const bobbing = Math.sin(this.animFrame * 2) * (this.isMoving ? 0.5 : 0);
+
+                // Shadow (oval shaped like Prairie King)
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+                ctx.beginPath();
+                ctx.ellipse(x, y + 30, 10, 3, 0, 0, 2 * Math.PI);
+                ctx.fill();
+
+                // Body (Prairie King style vest)
+                ctx.fillStyle = '#8B4513'; // Brown vest
+                ctx.fillRect(x - 8, y - 1 + bobbing, 16, 16);
+                ctx.fillStyle = '#A0522D'; // Lighter brown details
+                ctx.fillRect(x - 6, y + 1 + bobbing, 12, 12);
+
+                // Vest trim and buttons
+                ctx.fillStyle = '#654321';
+                ctx.fillRect(x - 7, y + bobbing, 2, 14);
+                ctx.fillRect(x + 5, y + bobbing, 2, 14);
+                ctx.fillStyle = '#FFD700'; // Gold buttons
+                for (let i = 0; i < 3; i++) {
+                    ctx.fillRect(x - 1, y + 3 + i * 4 + bobbing, 2, 2);
+                }
+
+                // White shirt underneath
+                ctx.fillStyle = '#F5F5DC';
+                ctx.fillRect(x - 4, y + 13 + bobbing, 8, 4);
+                ctx.fillRect(x - 3, y - 1 + bobbing, 6, 3);
+
+                // Head (Prairie King proportions)
+                ctx.fillStyle = '#FDBCB4';
+                ctx.fillRect(x - 7, y - 16 + bobbing, 14, 15);
+
+                // Neck
+                ctx.fillStyle = '#FDBCB4';
+                ctx.fillRect(x - 2, y - 2 + bobbing, 4, 3);
+
+                // Prairie King style hat (brown with wide brim)
+                ctx.fillStyle = '#654321';
+                ctx.fillRect(x - 6, y - 20 + bobbing, 12, 5); // Crown
+                ctx.fillRect(x - 10, y - 17 + bobbing, 20, 2); // Brim
+
+                // Hat band
+                ctx.fillStyle = '#8B0000';
+                ctx.fillRect(x - 6, y - 18 + bobbing, 12, 1);
+
+                // Hat decoration (feather)
+                ctx.fillStyle = '#228B22';
+                ctx.fillRect(x + 4, y - 19 + bobbing, 1, 4);
+                ctx.fillStyle = '#32CD32';
+                ctx.fillRect(x + 5, y - 18 + bobbing, 1, 2);
+
+                // Face details (Prairie King style)
+                // Eyes (larger, more cartoon-like)
+                ctx.fillStyle = '#FFF';
+                ctx.fillRect(x - 5, y - 12 + bobbing, 3, 3);
+                ctx.fillRect(x + 2, y - 12 + bobbing, 3, 3);
+                ctx.fillStyle = '#000';
+                ctx.fillRect(x - 4 + dir, y - 11 + bobbing, 1, 2);
+                ctx.fillRect(x + 3 + dir, y - 11 + bobbing, 1, 2);
+
+                // Eyebrows
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(x - 5, y - 13 + bobbing, 3, 1);
+                ctx.fillRect(x + 2, y - 13 + bobbing, 3, 1);
+
+                // Nose (small dot)
+                ctx.fillStyle = '#CD853F';
+                ctx.fillRect(x - 1, y - 9 + bobbing, 2, 2);
+
+                // Mustache (Prairie King style)
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(x - 4, y - 7 + bobbing, 8, 2);
+                ctx.fillRect(x - 5, y - 6 + bobbing, 2, 1);
+                ctx.fillRect(x + 3, y - 6 + bobbing, 2, 1);
+
+                // Arms with animation (Prairie King proportions)
+                ctx.fillStyle = '#F5DEB3';
+                // Left arm
+                ctx.fillRect(x - 12, y + 2 + armSwing + bobbing, 4, 12);
+                // Right arm (gun arm)
+                ctx.fillRect(x + 8, y + 2 - armSwing + bobbing, 4, 12);
+
+                // Hands
+                ctx.fillStyle = '#FDBCB4';
+                ctx.fillRect(x - 12, y + 12 + armSwing + bobbing, 3, 3);
+                ctx.fillRect(x + 9, y + 12 - armSwing + bobbing, 3, 3);
+
+                // Gun (Prairie King style revolver)
+                ctx.fillStyle = '#2F2F2F';
+                ctx.fillRect(x + 10, y + 10 - armSwing + bobbing, 2, 5);
+                ctx.fillStyle = '#8B4513'; // Wooden grip
+                ctx.fillRect(x + 10, y + 13 - armSwing + bobbing, 2, 2);
+                ctx.fillStyle = '#C0C0C0'; // Silver barrel
+                ctx.fillRect(x + 12, y + 11 - armSwing + bobbing, 3, 1);
+
+                // Legs with walking animation (Prairie King style)
+                ctx.fillStyle = '#000080'; // Blue jeans
+                // Left leg
+                ctx.fillRect(x - 5, y + 17 + bobbing, 3, 8 - Math.abs(legSwing));
+                // Right leg
+                ctx.fillRect(x + 2, y + 17 + bobbing, 3, 8 + Math.abs(legSwing));
+
+                // Boots (Prairie King style)
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(x - 6, y + 24 - Math.abs(legSwing) + bobbing, 4, 3);
+                ctx.fillRect(x + 2, y + 24 + Math.abs(legSwing) + bobbing, 4, 3);
+
+                // Boot details (spurs and buckles)
+                ctx.fillStyle = '#C0C0C0';
+                ctx.fillRect(x - 7, y + 25 - Math.abs(legSwing) + bobbing, 1, 1);
+                ctx.fillRect(x + 5, y + 25 + Math.abs(legSwing) + bobbing, 1, 1);
+
+                // Gun holster (detailed)
+                ctx.fillStyle = '#654321';
+                ctx.fillRect(x + 6 * dir, y + 8 + bobbing, 3, 8);
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(x + 6 * dir, y + 6 + bobbing, 3, 2);
+
+                // Holster strap
+                ctx.fillStyle = '#654321';
+                ctx.fillRect(x + 4 * dir, y + 10 + bobbing, 2, 1);
+
+                // Belt (Prairie King style with ammo)
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(x - 8, y + 6 + bobbing, 16, 2);
+
+                // Belt buckle
+                ctx.fillStyle = '#FFD700';
+                ctx.fillRect(x - 2, y + 6 + bobbing, 4, 2);
+                ctx.fillStyle = '#B8860B';
+                ctx.fillRect(x - 1, y + 6 + bobbing, 2, 1);
+
+                // Ammo on belt
+                ctx.fillStyle = '#DAA520';
+                for (let i = 0; i < 3; i++) {
+                    ctx.fillRect(x - 6 + i * 4, y + 7 + bobbing, 1, 2);
+                }
+
+                // Bandana (Prairie King signature)
+                ctx.fillStyle = '#DC143C';
+                ctx.fillRect(x - 3, y - 3 + bobbing, 6, 2);
+                ctx.fillRect(x - 2, y - 1 + bobbing, 4, 1);
+
+                // Bandana knot
+                ctx.fillStyle = '#B22222';
+                ctx.fillRect(x + 2, y - 2 + bobbing, 2, 2);
+            }
+        }
+
+        // Enemy class
+        class Enemy {
+            constructor(x, y, type) {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.size = ENEMY_SIZE;
+                this.shootCooldown = 0;
+                // Animation properties
+                this.animFrame = Math.random() * Math.PI * 2; // Random start
+                this.facingDirection = 1;
+
+                switch (type) {
+                    case 'bandit':
+                        this.speed = 1.2;
+                        this.health = 1;
+                        this.color = '#8B4513';
+                        this.points = 10;
+                        this.name = 'Prairie Bandit';
+                        break;
+                    case 'outlaw':
+                        this.speed = 2;
+                        this.health = 2;
+                        this.color = '#654321';
+                        this.points = 20;
+                        this.name = 'Desert Outlaw';
+                        break;
+                    case 'desperado':
+                        this.speed = 1.5;
+                        this.health = 3;
+                        this.color = '#2F4F4F';
+                        this.points = 30;
+                        this.name = 'Desperado Gunslinger';
+                        break;
+                    case 'sheriff':
+                        this.speed = 0.8;
+                        this.health = 20;
+                        this.color = '#B8860B';
+                        this.points = 200;
+                        this.size = 32; // Bigger boss
+                        this.name = 'Corrupt Sheriff King';
+                        break;
+                }
+            }
+
+            update() {
+                // Move towards player
+                let dx = player.x - this.x;
+                let dy = player.y - this.y;
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance > 0) {
+                    dx /= distance;
+                    dy /= distance;
+
+                    // Update facing direction
+                    this.facingDirection = dx > 0 ? 1 : -1;
+
+                    if (this.type === 'outlaw') {
+                        // Erratic movement for outlaws
+                        dx += (Math.random() - 0.5) * 0.5;
+                        dy += (Math.random() - 0.5) * 0.5;
+                    }
+
+                    this.x += dx * this.speed;
+                    this.y += dy * this.speed;
+
+                    // Update animation
+                    this.animFrame += 0.2;
+                }
+
+                // Sheriff boss shooting
+                if (this.type === 'sheriff') {
+                    if (this.shootCooldown > 0) this.shootCooldown--;
+                    if (this.shootCooldown === 0 && distance < 200) {
+                        bullets.push(new Bullet(this.x, this.y, dx * 4, dy * 4, 'enemy'));
+                        this.shootCooldown = 60;
+                    }
+                }
+            }
+
+            draw() {
+                const x = Math.floor(this.x);
+                const y = Math.floor(this.y);
+                const dir = this.facingDirection;
+
+                // Animation
+                const walkCycle = Math.sin(this.animFrame) * 1;
+                const armSwing = walkCycle * 1.5;
+                const legSwing = walkCycle * 2;
+
+                if (this.type === 'sheriff') {
+                    // Draw detailed corrupt sheriff boss
+
+                    // Shadow
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.fillRect(x - 16, y + 30, 32, 4);
+
+                    // Body (detailed uniform)
+                    ctx.fillStyle = '#B8860B';
+                    ctx.fillRect(x - 14, y - 6, 28, 22);
+                    ctx.fillStyle = '#8B7355';
+                    ctx.fillRect(x - 12, y - 4, 24, 18);
+
+                    // Uniform buttons
+                    ctx.fillStyle = '#FFD700';
+                    for (let i = 0; i < 4; i++) {
+                        ctx.fillRect(x - 2, y - 2 + i * 4, 2, 2);
+                    }
+
+                    // Head (menacing)
+                    ctx.fillStyle = '#FDBCB4';
+                    ctx.fillRect(x - 12, y - 26, 24, 20);
+
+                    // Sheriff hat (detailed)
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(x - 14, y - 30, 28, 6);
+                    ctx.fillRect(x - 16, y - 26, 32, 3);
+
+                    // Hat badge
+                    ctx.fillStyle = '#C0C0C0';
+                    ctx.fillRect(x - 4, y - 28, 8, 4);
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fillRect(x - 3, y - 27, 6, 2);
+
+                    // Face details
+                    // Eyes (angry red)
+                    ctx.fillStyle = '#FFF';
+                    ctx.fillRect(x - 8, y - 20, 4, 4);
+                    ctx.fillRect(x + 4, y - 20, 4, 4);
+                    ctx.fillStyle = '#FF0000';
+                    ctx.fillRect(x - 7 + dir, y - 19, 2, 3);
+                    ctx.fillRect(x + 5 + dir, y - 19, 2, 3);
+
+                    // Angry eyebrows
+                    ctx.fillStyle = '#654321';
+                    ctx.fillRect(x - 9, y - 22, 5, 1);
+                    ctx.fillRect(x + 4, y - 22, 5, 1);
+
+                    // Mustache (evil)
+                    ctx.fillStyle = '#2F2F2F';
+                    ctx.fillRect(x - 6, y - 14, 12, 3);
+                    ctx.fillRect(x - 8, y - 13, 2, 1);
+                    ctx.fillRect(x + 6, y - 13, 2, 1);
+
+                    // Badge on chest
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fillRect(x - 6, y - 2, 12, 8);
+                    ctx.fillStyle = '#B8860B';
+                    ctx.fillRect(x - 4, y, 8, 4);
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(x - 2, y + 1, 4, 2);
+
+                    // Arms with animation
+                    ctx.fillStyle = '#FDBCB4';
+                    ctx.fillRect(x - 22, y + armSwing, 8, 18);
+                    ctx.fillRect(x + 14, y - armSwing, 8, 18);
+
+                    // Hands with guns
+                    ctx.fillStyle = '#FDBCB4';
+                    ctx.fillRect(x - 22, y + 16 + armSwing, 6, 6);
+                    ctx.fillRect(x + 16, y + 16 - armSwing, 6, 6);
+
+                    // Guns
+                    ctx.fillStyle = '#2F2F2F';
+                    ctx.fillRect(x - 20, y + 14 + armSwing, 3, 8);
+                    ctx.fillRect(x + 17, y + 14 - armSwing, 3, 8);
+
+                    // Legs with animation
+                    ctx.fillStyle = '#000080';
+                    ctx.fillRect(x - 8, y + 16, 6, 14 - Math.abs(legSwing));
+                    ctx.fillRect(x + 2, y + 16, 6, 14 + Math.abs(legSwing));
+
+                    // Boots
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(x - 10, y + 28 - Math.abs(legSwing), 8, 4);
+                    ctx.fillRect(x + 2, y + 28 + Math.abs(legSwing), 8, 4);
+
+                } else {
+                    // Draw detailed bandits/outlaws/desperados
+
+                    // Shadow
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.fillRect(x - 8, y + 20, 16, 3);
+
+                    // Body
+                    ctx.fillStyle = this.color;
+                    ctx.fillRect(x - 7, y - 2, 14, 14);
+                    ctx.fillStyle = '#654321';
+                    ctx.fillRect(x - 6, y, 12, 10);
+
+                    // Head
+                    ctx.fillStyle = '#FDBCB4';
+                    ctx.fillRect(x - 6, y - 14, 12, 12);
+
+                    // Hat/Bandana based on type
+                    if (this.type === 'bandit') {
+                        // Red bandana
+                        ctx.fillStyle = '#8B0000';
+                        ctx.fillRect(x - 7, y - 16, 14, 4);
+                        ctx.fillRect(x - 8, y - 14, 16, 2);
+                        // Bandana knot
+                        ctx.fillStyle = '#DC143C';
+                        ctx.fillRect(x + 6, y - 15, 3, 3);
+                    } else if (this.type === 'outlaw') {
+                        // Black hat
+                        ctx.fillStyle = '#000';
+                        ctx.fillRect(x - 6, y - 18, 12, 4);
+                        ctx.fillRect(x - 9, y - 16, 18, 2);
+                        // Hat band
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillRect(x - 6, y - 16, 12, 1);
+                    } else if (this.type === 'desperado') {
+                        // Gray sombrero
+                        ctx.fillStyle = '#2F4F4F';
+                        ctx.fillRect(x - 7, y - 18, 14, 4);
+                        ctx.fillRect(x - 10, y - 16, 20, 2);
+                        // Scar
+                        ctx.fillStyle = '#8B0000';
+                        ctx.fillRect(x - 1, y - 10, 1, 6);
+                    }
+
+                    // Face details
+                    // Eyes
+                    ctx.fillStyle = '#FFF';
+                    ctx.fillRect(x - 4, y - 10, 2, 2);
+                    ctx.fillRect(x + 2, y - 10, 2, 2);
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(x - 3 + dir * 0.5, y - 9, 1, 1);
+                    ctx.fillRect(x + 3 + dir * 0.5, y - 9, 1, 1);
+
+                    // Beard/stubble
+                    ctx.fillStyle = '#654321';
+                    ctx.fillRect(x - 3, y - 6, 6, 2);
+
+                    // Arms with animation
+                    ctx.fillStyle = '#FDBCB4';
+                    ctx.fillRect(x - 11, y + 2 + armSwing, 4, 12);
+                    ctx.fillRect(x + 7, y + 2 - armSwing, 4, 12);
+
+                    // Hands
+                    ctx.fillStyle = '#FDBCB4';
+                    ctx.fillRect(x - 11, y + 12 + armSwing, 3, 3);
+                    ctx.fillRect(x + 8, y + 12 - armSwing, 3, 3);
+
+                    // Weapon
+                    ctx.fillStyle = '#2F2F2F';
+                    ctx.fillRect(x + 8, y + 10 - armSwing, 2, 6);
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillRect(x + 8, y + 13 - armSwing, 2, 2);
+
+                    // Legs with animation
+                    ctx.fillStyle = '#654321';
+                    ctx.fillRect(x - 4, y + 12, 3, 8 - Math.abs(legSwing * 0.5));
+                    ctx.fillRect(x + 1, y + 12, 3, 8 + Math.abs(legSwing * 0.5));
+
+                    // Boots
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillRect(x - 5, y + 18 - Math.abs(legSwing * 0.5), 4, 3);
+                    ctx.fillRect(x + 1, y + 18 + Math.abs(legSwing * 0.5), 4, 3);
+                }
+
+                // Health indicator
+                if (this.health < this.getMaxHealth()) {
+                    ctx.fillStyle = '#8B0000';
+                    ctx.fillRect(x - this.size / 2, y - this.size / 2 - 12, this.size, 3);
+                    ctx.fillStyle = '#FF0000';
+                    ctx.fillRect(x - this.size / 2, y - this.size / 2 - 12,
+                        (this.health / this.getMaxHealth()) * this.size, 3);
+                    // Health bar border
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x - this.size / 2, y - this.size / 2 - 12, this.size, 3);
+                }
+            }
+
+            getMaxHealth() {
+                switch (this.type) {
+                    case 'bandit': return 1;
+                    case 'outlaw': return 2;
+                    case 'desperado': return 3;
+                    case 'sheriff': return 20;
+                }
+            }
+
+            takeDamage() {
+                this.health--;
+                if (this.health <= 0) {
+                    score += this.points;
+                    playSound('enemyDeath');
+
+                    // Drop power-ups randomly
+                    if (Math.random() < 0.15) {
+                        let powerUpType = ['speed', 'machinegun', 'shotgun', 'life', 'magnet'][Math.floor(Math.random() * 5)];
+                        powerUps.push(new PowerUp(this.x, this.y, powerUpType));
+                    }
+
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        // Bullet class
+        class Bullet {
+            constructor(x, y, vx, vy, owner) {
+                this.x = x;
+                this.y = y;
+                this.vx = vx;
+                this.vy = vy;
+                this.owner = owner;
+                this.size = BULLET_SIZE;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // Remove if off screen
+                return this.x < 0 || this.x > CANVAS_WIDTH || this.y < 0 || this.y > CANVAS_HEIGHT;
+            }
+
+            draw() {
+                const x = Math.floor(this.x);
+                const y = Math.floor(this.y);
+
+                if (this.owner === 'player') {
+                    // Player bullets (golden like brass) - 2x bigger
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fillRect(x - 4, y - 2, 8, 4);
+                    ctx.fillStyle = '#FFA500';
+                    ctx.fillRect(x - 2, y - 2, 4, 4);
+                } else {
+                    // Enemy bullets (dark red) - 2x bigger
+                    ctx.fillStyle = '#8B0000';
+                    ctx.fillRect(x - 4, y - 2, 8, 4);
+                    ctx.fillStyle = '#FF0000';
+                    ctx.fillRect(x - 2, y - 2, 4, 4);
+                }
+            }
+        }
+
+        // PowerUp class
+        class PowerUp {
+            constructor(x, y, type) {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.size = POWERUP_SIZE;
+                this.timer = 600; // 10 seconds at 60fps
+                this.bobOffset = Math.random() * Math.PI * 2;
+            }
+
+            update() {
+                this.timer--;
+
+                // Magnet effect
+                if (player.magnetRange > 0) {
+                    let dx = player.x - this.x;
+                    let dy = player.y - this.y;
+                    let distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < player.magnetRange && distance > 0) {
+                        dx /= distance;
+                        dy /= distance;
+                        this.x += dx * 4;
+                        this.y += dy * 4;
+                    }
+                }
+
+                return this.timer <= 0;
+            }
+
+            draw() {
+                const x = Math.floor(this.x);
+                const bobY = Math.floor(this.y + Math.sin(Date.now() * 0.01 + this.bobOffset) * 4);
+
+                switch (this.type) {
+                    case 'speed':
+                        // Spurs (2x bigger)
+                        ctx.fillStyle = '#C0C0C0';
+                        ctx.fillRect(x - 12, bobY - 8, 24, 16);
+                        ctx.fillStyle = '#FFD700';
+                        ctx.fillRect(x - 8, bobY - 4, 16, 8);
+                        // Spur details
+                        ctx.fillStyle = '#C0C0C0';
+                        ctx.fillRect(x - 4, bobY - 2, 8, 4);
+                        break;
+                    case 'machinegun':
+                        // Gatling gun ammo (2x bigger)
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillRect(x - 10, bobY - 6, 20, 12);
+                        ctx.fillStyle = '#FFD700';
+                        ctx.fillRect(x - 6, bobY - 2, 4, 4);
+                        ctx.fillRect(x + 2, bobY - 2, 4, 4);
+                        break;
+                    case 'shotgun':
+                        // Shotgun shells (2x bigger)
+                        ctx.fillStyle = '#8B0000';
+                        ctx.fillRect(x - 8, bobY - 6, 16, 12);
+                        ctx.fillStyle = '#FFD700';
+                        ctx.fillRect(x - 6, bobY - 4, 12, 8);
+                        break;
+                    case 'life':
+                        // Heart/health potion (2x bigger)
+                        ctx.fillStyle = '#8B0000';
+                        ctx.fillRect(x - 8, bobY - 4, 6, 8);
+                        ctx.fillRect(x + 2, bobY - 4, 6, 8);
+                        ctx.fillRect(x - 6, bobY - 2, 12, 6);
+                        ctx.fillStyle = '#FF0000';
+                        ctx.fillRect(x - 6, bobY - 2, 4, 4);
+                        ctx.fillRect(x + 2, bobY - 2, 4, 4);
+                        break;
+                    case 'magnet':
+                        // Horseshoe (lucky charm) (2x bigger)
+                        ctx.fillStyle = '#C0C0C0';
+                        ctx.fillRect(x - 8, bobY - 6, 16, 4);
+                        ctx.fillRect(x - 8, bobY - 2, 4, 8);
+                        ctx.fillRect(x + 4, bobY - 2, 4, 8);
+                        ctx.fillStyle = '#FFD700';
+                        ctx.fillRect(x - 6, bobY - 4, 12, 2);
+                        break;
+                }
+            }
+
+            collect() {
+                playSound('powerup');
+                switch (this.type) {
+                    case 'speed':
+                        player.speed = Math.min(player.speed + 0.5, 6);
+                        break;
+                    case 'machinegun':
+                        player.weapon = 'machinegun';
+                        player.weaponTimer = 600;
+                        break;
+                    case 'shotgun':
+                        player.weapon = 'shotgun';
+                        player.weaponTimer = 600;
+                        break;
+                    case 'life':
+                        lives = Math.min(lives + 1, 5);
+                        break;
+                    case 'magnet':
+                        player.magnetRange = 100;
+                        player.magnetTimer = 600;
+                        break;
+                }
+            }
+        }
+
+        // Game objects
+        let player;
+        let enemies = [];
+        let bullets = [];
+        let powerUps = [];
+        let waveEnemiesRemaining = 0;
+        let waveStartDelay = 0;
+
+        // Background drawing function (Prairie King style)
+        function drawBackground(world) {
+            // Sky gradient (Prairie King style)
+            const gradient = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+            if (world.bgPattern === 'desert') {
+                gradient.addColorStop(0, '#87CEEB'); // Sky blue
+                gradient.addColorStop(0.7, '#F0E68C'); // Light yellow
+                gradient.addColorStop(1, '#DEB887'); // Tan
+            } else if (world.bgPattern === 'canyon') {
+                gradient.addColorStop(0, '#4682B4'); // Steel blue
+                gradient.addColorStop(0.7, '#CD853F'); // Peru
+                gradient.addColorStop(1, '#A0522D'); // Sienna
+            } else {
+                gradient.addColorStop(0, '#696969'); // Dim gray
+                gradient.addColorStop(0.7, '#8B7355'); // Dark khaki
+                gradient.addColorStop(1, '#654321'); // Dark brown
+            }
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // Clouds (Prairie King style)
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            for (let i = 0; i < 4; i++) {
+                let x = (i * 200) + 50 + Math.sin(Date.now() * 0.0005 + i) * 20;
+                let y = 40 + Math.sin(i * 2) * 15;
+                // Cloud shape
+                ctx.fillRect(x, y, 30, 12);
+                ctx.fillRect(x - 6, y + 4, 42, 8);
+                ctx.fillRect(x + 8, y - 4, 14, 8);
+            }
+
+            if (world.bgPattern === 'desert') {
+                // Prairie King desert with detailed cacti and tumbleweeds
+                for (let i = 0; i < 8; i++) {
+                    let x = (i * 100) + 50;
+                    let y = CANVAS_HEIGHT - 80 - (Math.sin(i) * 15);
+
+                    // Detailed cactus
+                    ctx.fillStyle = '#228B22';
+                    ctx.fillRect(x - 4, y - 25, 8, 25);
+                    ctx.fillRect(x - 8, y - 18, 4, 10);
+                    ctx.fillRect(x + 4, y - 15, 4, 8);
+
+                    // Cactus details (spines)
+                    ctx.fillStyle = '#FFFF00';
+                    for (let j = 0; j < 3; j++) {
+                        ctx.fillRect(x - 2, y - 20 + j * 6, 1, 1);
+                        ctx.fillRect(x + 1, y - 18 + j * 6, 1, 1);
+                    }
+
+                    // Cactus flower
+                    if (i % 3 === 0) {
+                        ctx.fillStyle = '#FF69B4';
+                        ctx.fillRect(x - 1, y - 27, 2, 2);
+                    }
+                }
+
+                // Tumbleweeds
+                for (let i = 0; i < 3; i++) {
+                    let x = (i * 250) + 100 + Math.sin(Date.now() * 0.001 + i) * 30;
+                    let y = CANVAS_HEIGHT - 40;
+                    ctx.fillStyle = '#DEB887';
+                    ctx.fillRect(x, y, 8, 6);
+                    ctx.fillRect(x - 2, y + 2, 12, 2);
+                }
+
+                // Desert rocks
+                for (let i = 0; i < 5; i++) {
+                    let x = (i * 150) + 75;
+                    let y = CANVAS_HEIGHT - 35;
+                    ctx.fillStyle = '#A0522D';
+                    ctx.fillRect(x, y, 12, 8);
+                    ctx.fillRect(x + 3, y - 4, 6, 4);
+                }
+
+            } else if (world.bgPattern === 'canyon') {
+                // Prairie King canyon with mesas and rock formations
+                for (let i = 0; i < 5; i++) {
+                    let x = i * 160 + 80;
+                    let y = CANVAS_HEIGHT - 120;
+
+                    // Mesa formations
+                    ctx.fillStyle = '#CD853F';
+                    ctx.fillRect(x - 25, y - 40, 50, 40);
+                    ctx.fillStyle = '#A0522D';
+                    ctx.fillRect(x - 20, y - 60, 40, 20);
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillRect(x - 15, y - 70, 30, 10);
+
+                    // Rock layers
+                    ctx.fillStyle = '#654321';
+                    for (let j = 0; j < 3; j++) {
+                        ctx.fillRect(x - 25, y - 35 + j * 12, 50, 2);
+                    }
+                }
+
+                // Canyon vegetation
+                for (let i = 0; i < 6; i++) {
+                    let x = (i * 130) + 65;
+                    let y = CANVAS_HEIGHT - 45;
+                    ctx.fillStyle = '#556B2F';
+                    ctx.fillRect(x, y, 4, 8);
+                    ctx.fillRect(x - 2, y + 2, 8, 2);
+                }
+
+            } else if (world.bgPattern === 'town') {
+                // Prairie King ghost town with detailed buildings
+                for (let i = 0; i < 4; i++) {
+                    let x = i * 200 + 100;
+                    let y = CANVAS_HEIGHT - 120;
+
+                    // Building base
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillRect(x - 40, y - 50, 80, 50);
+
+                    // Roof
+                    ctx.fillStyle = '#654321';
+                    ctx.fillRect(x - 45, y - 60, 90, 10);
+
+                    // Building details
+                    ctx.fillStyle = '#A0522D';
+                    ctx.fillRect(x - 35, y - 45, 70, 40);
+
+                    // Windows
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(x - 25, y - 35, 12, 15);
+                    ctx.fillRect(x + 13, y - 35, 12, 15);
+
+                    // Window frames
+                    ctx.fillStyle = '#654321';
+                    ctx.strokeRect(x - 25, y - 35, 12, 15);
+                    ctx.strokeRect(x + 13, y - 35, 12, 15);
+
+                    // Door
+                    ctx.fillStyle = '#654321';
+                    ctx.fillRect(x - 6, y - 25, 12, 25);
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillRect(x - 4, y - 23, 8, 23);
+
+                    // Door handle
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fillRect(x + 2, y - 12, 1, 1);
+
+                    // Sign
+                    if (i === 1) {
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillRect(x - 15, y - 40, 30, 8);
+                        ctx.fillStyle = '#F5DEB3';
+                        ctx.fillRect(x - 13, y - 38, 26, 4);
+                    }
+                }
+
+                // Wooden fence
+                for (let i = 0; i < CANVAS_WIDTH; i += 20) {
+                    ctx.fillStyle = '#8B4513';
+                    ctx.fillRect(i, CANVAS_HEIGHT - 30, 2, 15);
+                    ctx.fillRect(i - 8, CANVAS_HEIGHT - 25, 16, 2);
+                    ctx.fillRect(i - 8, CANVAS_HEIGHT - 20, 16, 2);
+                }
+
+                // Tumbleweeds in town
+                for (let i = 0; i < 2; i++) {
+                    let x = (i * 300) + 150 + Math.sin(Date.now() * 0.001 + i) * 20;
+                    let y = CANVAS_HEIGHT - 35;
+                    ctx.fillStyle = '#DEB887';
+                    ctx.fillRect(x, y, 6, 4);
+                    ctx.fillRect(x - 1, y + 1, 8, 2);
+                }
+            }
+
+            // Distant mountains (layered like Prairie King)
+            for (let layer = 0; layer < 3; layer++) {
+                ctx.fillStyle = `rgba(139, 69, 19, ${0.2 + layer * 0.1})`;
+                for (let i = 0; i < CANVAS_WIDTH; i += 60 + layer * 20) {
+                    let height = 30 + Math.sin(i * 0.01 + layer) * 15 + layer * 10;
+                    ctx.fillRect(i, 60 + layer * 15, 60 + layer * 20, height);
+                }
+            }
+        }
+
+        // Initialize game
+        function startGame() {
+            gameState = 'playing';
+            score = 0;
+            lives = 3;
+            currentWave = 1;
+            currentWorld = 0;
+
+            player = new Player(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+            enemies = [];
+            bullets = [];
+            powerUps = [];
+
+            startWave();
+        }
+
+        function startWave() {
+            waveStartDelay = 120; // 2 seconds
+            let enemyCount = Math.min(5 + currentWave * 2, 20);
+
+            // Sheriff boss wave
+            if (currentWave === worlds[currentWorld].waves) {
+                enemies.push(new Enemy(100, 100, 'sheriff'));
+                enemyCount = Math.floor(enemyCount / 2);
+            }
+
+            // Spawn regular enemies
+            for (let i = 0; i < enemyCount; i++) {
+                setTimeout(() => {
+                    if (gameState === 'playing') {
+                        spawnEnemy();
+                    }
+                }, i * 200);
+            }
+
+            waveEnemiesRemaining = enemyCount + (currentWave === worlds[currentWorld].waves ? 1 : 0);
+        }
+
+        function spawnEnemy() {
+            let x, y;
+            let side = Math.floor(Math.random() * 4);
+
+            switch (side) {
+                case 0: x = Math.random() * CANVAS_WIDTH; y = -ENEMY_SIZE; break;
+                case 1: x = CANVAS_WIDTH + ENEMY_SIZE; y = Math.random() * CANVAS_HEIGHT; break;
+                case 2: x = Math.random() * CANVAS_WIDTH; y = CANVAS_HEIGHT + ENEMY_SIZE; break;
+                case 3: x = -ENEMY_SIZE; y = Math.random() * CANVAS_HEIGHT; break;
+            }
+
+            let types = ['bandit', 'outlaw', 'desperado'];
+            let weights = [0.5, 0.3, 0.2];
+
+            // Adjust enemy types based on world and wave
+            if (currentWorld >= 1) weights = [0.3, 0.4, 0.3];
+            if (currentWorld >= 2) weights = [0.2, 0.3, 0.5];
+
+            let rand = Math.random();
+            let type = 'bandit';
+            let cumulative = 0;
+
+            for (let i = 0; i < types.length; i++) {
+                cumulative += weights[i];
+                if (rand < cumulative) {
+                    type = types[i];
+                    break;
+                }
+            }
+
+            enemies.push(new Enemy(x, y, type));
+        }
+
+        // Collision detection
+        function checkCollisions() {
+            // Player-enemy collisions
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let enemy = enemies[i];
+                let dx = player.x - enemy.x;
+                let dy = player.y - enemy.y;
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < (player.size + enemy.size) / 2) {
+                    lives--;
+                    playSound('playerHit');
+                    enemies.splice(i, 1);
+                    waveEnemiesRemaining--;
+
+                    if (lives <= 0) {
+                        gameState = 'gameOver';
+                        if (score > highScore) {
+                            highScore = score;
+                            localStorage.setItem('xiruDosPampasHighScore', highScore);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Bullet-enemy collisions
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                let bullet = bullets[i];
+                if (bullet.owner !== 'player') continue;
+
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    let enemy = enemies[j];
+                    let dx = bullet.x - enemy.x;
+                    let dy = bullet.y - enemy.y;
+                    let distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < (bullet.size + enemy.size) / 2) {
+                        bullets.splice(i, 1);
+                        if (enemy.takeDamage()) {
+                            enemies.splice(j, 1);
+                            waveEnemiesRemaining--;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Enemy bullet-player collisions
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                let bullet = bullets[i];
+                if (bullet.owner !== 'enemy') continue;
+
+                let dx = bullet.x - player.x;
+                let dy = bullet.y - player.y;
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < (bullet.size + player.size) / 2) {
+                    bullets.splice(i, 1);
+                    lives--;
+                    playSound('playerHit');
+
+                    if (lives <= 0) {
+                        gameState = 'gameOver';
+                        if (score > highScore) {
+                            highScore = score;
+                            localStorage.setItem('xiruDosPampasHighScore', highScore);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Player-powerup collisions
+            for (let i = powerUps.length - 1; i >= 0; i--) {
+                let powerUp = powerUps[i];
+                let dx = player.x - powerUp.x;
+                let dy = player.y - powerUp.y;
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < (player.size + powerUp.size) / 2) {
+                    powerUp.collect();
+                    powerUps.splice(i, 1);
+                }
+            }
+        }
+
+        // Audio system
+        let audioContext;
+
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioContext) return;
+
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            switch (type) {
+                case 'shoot':
+                    oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(400, audioContext.currentTime + 0.1);
+                    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+                    oscillator.start();
+                    oscillator.stop(audioContext.currentTime + 0.1);
+                    break;
+                case 'enemyDeath':
+                    oscillator.frequency.setValueAtTime(200, audioContext.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(50, audioContext.currentTime + 0.3);
+                    gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+                    oscillator.start();
+                    oscillator.stop(audioContext.currentTime + 0.3);
+                    break;
+                case 'playerHit':
+                    oscillator.frequency.setValueAtTime(150, audioContext.currentTime);
+                    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+                    oscillator.start();
+                    oscillator.stop(audioContext.currentTime + 0.5);
+                    break;
+                case 'powerup':
+                    oscillator.frequency.setValueAtTime(400, audioContext.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(800, audioContext.currentTime + 0.2);
+                    gainNode.gain.setValueAtTime(0.15, audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+                    oscillator.start();
+                    oscillator.stop(audioContext.currentTime + 0.2);
+                    break;
+            }
+        }
+
+        // Game loop
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function update() {
+            if (gameState === 'playing') {
+                if (waveStartDelay > 0) {
+                    waveStartDelay--;
+                    return;
+                }
+
+                player.update();
+
+                // Update enemies
+                enemies.forEach(enemy => enemy.update());
+
+                // Update bullets
+                for (let i = bullets.length - 1; i >= 0; i--) {
+                    if (bullets[i].update()) {
+                        bullets.splice(i, 1);
+                    }
+                }
+
+                // Update power-ups
+                for (let i = powerUps.length - 1; i >= 0; i--) {
+                    if (powerUps[i].update()) {
+                        powerUps.splice(i, 1);
+                    }
+                }
+
+                checkCollisions();
+
+                // Check wave completion
+                if (waveEnemiesRemaining <= 0 && enemies.length === 0) {
+                    if (currentWave >= worlds[currentWorld].waves) {
+                        // World completed
+                        if (currentWorld < worlds.length - 1) {
+                            currentWorld++;
+                            currentWave = 1;
+                            gameState = 'levelTransition';
+                            setTimeout(() => {
+                                if (gameState === 'levelTransition') {
+                                    gameState = 'playing';
+                                    startWave();
+                                }
+                            }, 3000);
+                        } else {
+                            // Game completed!
+                            gameState = 'gameOver';
+                            if (score > highScore) {
+                                highScore = score;
+                                localStorage.setItem('xiruDosPampasHighScore', highScore);
+                            }
+                        }
+                    } else {
+                        currentWave++;
+                        startWave();
+                    }
+                }
+            }
+        }
+
+        function draw() {
+            // Clear canvas with world-appropriate background
+            const world = worlds[currentWorld];
+            ctx.fillStyle = world.color;
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // Draw 16-bit style background patterns
+            drawBackground(world);
+
+            // Draw ground texture (proportional to 2x scale)
+            ctx.fillStyle = world.accent;
+            for (let x = 0; x < CANVAS_WIDTH; x += 12) {
+                for (let y = CANVAS_HEIGHT - 24; y < CANVAS_HEIGHT; y += 12) {
+                    if ((x + y) % 24 === 0) {
+                        ctx.fillRect(x, y, 12, 12);
+                    }
+                }
+            }
+
+            if (gameState === 'playing' || gameState === 'levelTransition') {
+                // Draw game objects
+                player.draw();
+                enemies.forEach(enemy => enemy.draw());
+                bullets.forEach(bullet => bullet.draw());
+                powerUps.forEach(powerUp => powerUp.draw());
+
+                // Draw wave start countdown
+                if (waveStartDelay > 0) {
+                    ctx.fillStyle = 'white';
+                    ctx.font = '32px Press Start 2P';
+                    ctx.textAlign = 'center';
+                    let countdown = Math.ceil(waveStartDelay / 60);
+                    ctx.fillText(countdown.toString(), CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+                }
+            }
+
+            if (gameState === 'menu') {
+                drawMenu();
+            } else if (gameState === 'gameOver') {
+                drawGameOver();
+            } else if (gameState === 'levelTransition') {
+                drawLevelTransition();
+            }
+
+            // Update UI
+            updateUI();
+        }
+
+        function drawMenu() {
+            // Draw title with western styling
+            ctx.fillStyle = '#8B4513';
+            ctx.font = '28px Press Start 2P';
+            ctx.textAlign = 'center';
+            ctx.fillText('XIRU DOS', CANVAS_WIDTH / 2 + 2, CANVAS_HEIGHT / 2 - 98);
+            ctx.fillText('PAMPAS', CANVAS_WIDTH / 2 + 2, CANVAS_HEIGHT / 2 - 58);
+
+            ctx.fillStyle = '#FFD700';
+            ctx.fillText('XIRU DOS', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 100);
+            ctx.fillText('PAMPAS', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 60);
+
+            // Draw decorative elements
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(CANVAS_WIDTH / 2 - 100, CANVAS_HEIGHT / 2 - 110, 200, 4);
+            ctx.fillRect(CANVAS_WIDTH / 2 - 100, CANVAS_HEIGHT / 2 - 40, 200, 4);
+
+            ctx.font = '16px Press Start 2P';
+            ctx.fillStyle = '#FFFACD';
+            ctx.fillText('Press SPACEBAR to Start', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 20);
+
+            ctx.font = '12px Press Start 2P';
+            ctx.fillText(`High Score: ${highScore}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60);
+
+            // Draw cowboy silhouette
+            ctx.fillStyle = '#654321';
+            ctx.fillRect(CANVAS_WIDTH / 2 - 60, CANVAS_HEIGHT / 2 + 80, 8, 20);
+            ctx.fillRect(CANVAS_WIDTH / 2 - 64, CANVAS_HEIGHT / 2 + 75, 16, 8);
+            ctx.fillRect(CANVAS_WIDTH / 2 - 68, CANVAS_HEIGHT / 2 + 77, 24, 4);
+        }
+
+        function drawGameOver() {
+            ctx.fillStyle = 'rgba(139, 69, 19, 0.8)';
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // Draw tombstone
+            ctx.fillStyle = '#696969';
+            ctx.fillRect(CANVAS_WIDTH / 2 - 40, CANVAS_HEIGHT / 2 - 80, 80, 100);
+            ctx.fillRect(CANVAS_WIDTH / 2 - 30, CANVAS_HEIGHT / 2 - 100, 60, 20);
+
+            ctx.fillStyle = '#8B0000';
+            ctx.font = '24px Press Start 2P';
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', CANVAS_WIDTH / 2 + 2, CANVAS_HEIGHT / 2 - 48);
+
+            ctx.fillStyle = '#FFD700';
+            ctx.fillText('GAME OVER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 50);
+
+            ctx.font = '12px Press Start 2P';
+            ctx.fillStyle = '#FFFACD';
+            ctx.fillText(`Final Score: ${score}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 40);
+            ctx.fillText(`High Score: ${highScore}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60);
+            ctx.fillText('Press SPACEBAR to Restart', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100);
+
+            // Draw RIP on tombstone
+            ctx.fillStyle = '#000';
+            ctx.font = '12px Press Start 2P';
+            ctx.fillText('R.I.P.', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 25);
+        }
+
+        function drawLevelTransition() {
+            ctx.fillStyle = 'rgba(139, 69, 19, 0.9)';
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // Draw wanted poster style background
+            ctx.fillStyle = '#F5DEB3';
+            ctx.fillRect(CANVAS_WIDTH / 2 - 150, CANVAS_HEIGHT / 2 - 100, 300, 200);
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(CANVAS_WIDTH / 2 - 155, CANVAS_HEIGHT / 2 - 105, 310, 210);
+
+            ctx.fillStyle = '#8B0000';
+            ctx.font = '20px Press Start 2P';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${worlds[currentWorld - 1].name}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 60);
+            ctx.fillText('CLEARED!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 35);
+
+            ctx.font = '12px Press Start 2P';
+            ctx.fillStyle = '#654321';
+            if (currentWorld < worlds.length) {
+                ctx.fillText(`Next: ${worlds[currentWorld].name}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 10);
+            } else {
+                ctx.fillText('CONGRATULATIONS!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 10);
+                ctx.fillText('You are the fastest', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 30);
+                ctx.fillText('gun in the West!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 50);
+            }
+        }
+
+        function updateUI() {
+            document.getElementById('score').textContent = `💰 Score: ${score}`;
+            document.getElementById('lives').textContent = `❤️ Lives: ${lives}`;
+            document.getElementById('wave').textContent = `🌊 Wave: ${currentWave}`;
+            document.getElementById('world').textContent = `🏜️ World: ${worlds[currentWorld].name}`;
+        }
+
+        // Initialize audio on first user interaction
+        document.addEventListener('click', initAudio, { once: true });
+        document.addEventListener('keydown', initAudio, { once: true });
+
+        // Start the game loop
+        gameLoop();
+    </script>
+</body>
+
+</html>
